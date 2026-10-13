@@ -1,17 +1,41 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { EmptyState } from '../components/EmptyState'
+import { SortSelect } from '../components/SortSelect'
 import { useData } from '../context/DataContext'
 import { formatProductOptions, formatWon, optionCost, supplyOptionName, vendorNamesForProduct } from '../lib/format'
+import { compareDateDesc, compareKo, compareNumberAsc, compareNumberDesc } from '../lib/sort'
 
-type SortDir = 'asc' | 'desc'
+type ProductSort = 'name' | 'created'
+type PriceSort = 'price-asc' | 'price-desc' | 'supplier' | 'created'
+type PurchaseSort = 'price' | 'vendor' | 'created'
+
+const PRODUCT_SORT_OPTIONS: { value: ProductSort; label: string }[] = [
+  { value: 'name', label: '상품명순' },
+  { value: 'created', label: '등록일순' },
+]
+
+const PRICE_SORT_OPTIONS: { value: PriceSort; label: string }[] = [
+  { value: 'price-asc', label: '공급가 낮은순' },
+  { value: 'price-desc', label: '공급가 높은순' },
+  { value: 'supplier', label: '매출처명순' },
+  { value: 'created', label: '등록일순' },
+]
+
+const PURCHASE_SORT_OPTIONS: { value: PurchaseSort; label: string }[] = [
+  { value: 'price', label: '매입가순' },
+  { value: 'vendor', label: '매입처명순' },
+  { value: 'created', label: '등록일순' },
+]
 
 export function ByProduct() {
   const { data } = useData()
   const [selectedId, setSelectedId] = useState<string | null>(
     data.products[0]?.id ?? null,
   )
-  const [sortDir, setSortDir] = useState<SortDir>('asc')
+  const [productSort, setProductSort] = useState<ProductSort>('name')
+  const [priceSort, setPriceSort] = useState<PriceSort>('price-asc')
+  const [purchaseSort, setPurchaseSort] = useState<PurchaseSort>('price')
   const [query, setQuery] = useState('')
 
   const products = useMemo(() => {
@@ -22,8 +46,14 @@ export function ByProduct() {
         const vendors = vendorNamesForProduct(p.id, data.purchase_prices, data.suppliers).toLowerCase()
         return p.name.toLowerCase().includes(q) || vendors.includes(q)
       })
-      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  }, [data.products, data.purchase_prices, data.suppliers, query])
+      .sort((a, b) => {
+        if (productSort === 'created') {
+          const byDate = compareDateDesc(a.created_at, b.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.name, b.name)
+        }
+        return compareKo(a.name, b.name)
+      })
+  }, [data.products, data.purchase_prices, data.suppliers, productSort, query])
 
   const selected = data.products.find((p) => p.id === selectedId) ?? null
 
@@ -37,12 +67,22 @@ export function ByProduct() {
       }))
       .filter((row) => row.supplier)
 
-    return list.sort((a, b) =>
-      sortDir === 'asc'
-        ? a.sp.supply_price - b.sp.supply_price
-        : b.sp.supply_price - a.sp.supply_price,
-    )
-  }, [data.suppliers, data.supply_prices, selected, sortDir])
+    return list.sort((a, b) => {
+      if (priceSort === 'price-desc') {
+        const byPrice = compareNumberDesc(a.sp.supply_price, b.sp.supply_price)
+        return byPrice !== 0 ? byPrice : compareKo(a.supplier?.name ?? '', b.supplier?.name ?? '')
+      }
+      if (priceSort === 'supplier') {
+        return compareKo(a.supplier?.name ?? '', b.supplier?.name ?? '')
+      }
+      if (priceSort === 'created') {
+        const byDate = compareDateDesc(a.sp.created_at, b.sp.created_at)
+        return byDate !== 0 ? byDate : compareKo(a.supplier?.name ?? '', b.supplier?.name ?? '')
+      }
+      const byPrice = compareNumberAsc(a.sp.supply_price, b.sp.supply_price)
+      return byPrice !== 0 ? byPrice : compareKo(a.supplier?.name ?? '', b.supplier?.name ?? '')
+    })
+  }, [data.suppliers, data.supply_prices, priceSort, selected])
 
   const minPrice = rows.length
     ? Math.min(...rows.map((r) => r.sp.supply_price))
@@ -57,8 +97,18 @@ export function ByProduct() {
         vendor: data.suppliers.find((s) => s.id === pp.supplier_id),
       }))
       .filter((row) => row.vendor)
-      .sort((a, b) => a.pp.purchase_price - b.pp.purchase_price)
-  }, [data.purchase_prices, data.suppliers, selected])
+      .sort((a, b) => {
+        if (purchaseSort === 'vendor') {
+          return compareKo(a.vendor?.name ?? '', b.vendor?.name ?? '')
+        }
+        if (purchaseSort === 'created') {
+          const byDate = compareDateDesc(a.pp.created_at, b.pp.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.vendor?.name ?? '', b.vendor?.name ?? '')
+        }
+        const byPrice = compareNumberAsc(a.pp.purchase_price, b.pp.purchase_price)
+        return byPrice !== 0 ? byPrice : compareKo(a.vendor?.name ?? '', b.vendor?.name ?? '')
+      })
+  }, [data.purchase_prices, data.suppliers, purchaseSort, selected])
 
   if (data.products.length === 0) {
     return (
@@ -103,6 +153,7 @@ export function ByProduct() {
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
+            <SortSelect value={productSort} options={PRODUCT_SORT_OPTIONS} onChange={setProductSort} />
           </div>
           <div className="list">
             {products.map((product) => {
@@ -146,20 +197,7 @@ export function ByProduct() {
               ) : null}
             </div>
             <div className="sort-toggle">
-              <button
-                type="button"
-                className={`btn btn--sm ${sortDir === 'asc' ? 'btn--primary' : ''}`}
-                onClick={() => setSortDir('asc')}
-              >
-                공급가 ↑
-              </button>
-              <button
-                type="button"
-                className={`btn btn--sm ${sortDir === 'desc' ? 'btn--primary' : ''}`}
-                onClick={() => setSortDir('desc')}
-              >
-                공급가 ↓
-              </button>
+              <SortSelect value={priceSort} options={PRICE_SORT_OPTIONS} onChange={setPriceSort} />
             </div>
           </div>
 
@@ -219,8 +257,15 @@ export function ByProduct() {
                 </div>
               )}
 
-              <div className="panel__header" style={{ marginTop: '1.2rem' }}>
+              <div className="panel__header panel__header--row" style={{ marginTop: '1.2rem' }}>
                 <h2>매입처 매입가</h2>
+                {purchaseRows.length > 0 ? (
+                  <SortSelect
+                    value={purchaseSort}
+                    options={PURCHASE_SORT_OPTIONS}
+                    onChange={setPurchaseSort}
+                  />
+                ) : null}
               </div>
               {purchaseRows.length === 0 ? (
                 <p className="muted">등록된 매입가가 없습니다. 업체 관리의 매입처에서 입력하세요.</p>

@@ -507,6 +507,22 @@ export async function upsertPurchasePrice(supplierId, productId, purchasePrice) 
 
   await requireSupplierKind(supplierId, 'purchase')
 
+  const taken = await query(
+    `SELECT pp.supplier_id, s.name AS supplier_name
+     FROM purchase_prices pp
+     JOIN suppliers s ON s.id = pp.supplier_id
+     WHERE pp.product_id = $1
+     LIMIT 1`,
+    [productId],
+  )
+  if (taken.rows[0] && taken.rows[0].supplier_id !== supplierId) {
+    const error = new Error(
+      `이미 ‘${taken.rows[0].supplier_name}’ 매입처에 연결된 상품입니다.`,
+    )
+    error.status = 409
+    throw error
+  }
+
   const existing = await query(
     `SELECT * FROM purchase_prices
      WHERE supplier_id = $1 AND product_id = $2`,
@@ -538,6 +554,11 @@ export async function upsertPurchasePrice(supplierId, productId, purchasePrice) 
     if (err.code === '23503') {
       const error = new Error('매입처 또는 상품을 찾을 수 없습니다.')
       error.status = 404
+      throw error
+    }
+    if (err.code === '23505') {
+      const error = new Error('이미 다른 매입처에 연결된 상품입니다.')
+      error.status = 409
       throw error
     }
     throw err

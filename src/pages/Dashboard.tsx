@@ -26,7 +26,10 @@ export function Dashboard() {
     return (
       <div className="page">
         <div className="toast toast--error">{error}</div>
-        <p className="muted">Docker DB와 API 서버가 실행 중인지 확인해 주세요.</p>
+        <p className="muted">
+          도커는 DB만 켭니다. 화면 데이터는 API(포트 4000)가 따로 떠 있어야 합니다.
+          다른 터미널에서 <code>npm run dev:api</code>를 실행한 뒤 새로고침하세요.
+        </p>
       </div>
     )
   }

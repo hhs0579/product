@@ -3,9 +3,25 @@ import { Link } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EmptyState } from '../components/EmptyState'
 import { Modal } from '../components/Modal'
+import { SortSelect } from '../components/SortSelect'
 import { useData } from '../context/DataContext'
-import { formatDate, formatProductOptions, formatWon, optionCost, partnerLabel, supplyOptionName } from '../lib/format'
+import { formatDate, formatProductOptions, formatWon, optionCost, partnerLabel, productOptionsQueryText, supplyOptionName } from '../lib/format'
+import { compareDateDesc, compareKo, compareNumberAsc } from '../lib/sort'
 import type { PartnerKind, PurchasePrice, Supplier, SupplyPrice } from '../types'
+
+type NameSort = 'name' | 'created'
+type ItemSort = 'name' | 'created' | 'price'
+
+const PARTNER_SORT_OPTIONS: { value: NameSort; label: string }[] = [
+  { value: 'name', label: '업체명순' },
+  { value: 'created', label: '등록일순' },
+]
+
+const ITEM_SORT_OPTIONS: { value: ItemSort; label: string }[] = [
+  { value: 'name', label: '상품명순' },
+  { value: 'created', label: '등록일순' },
+  { value: 'price', label: '가격순' },
+]
 
 export function Suppliers() {
   const {
@@ -16,23 +32,21 @@ export function Suppliers() {
     updateSupplier,
     deleteSupplier,
     upsertPurchasePrice,
-    updatePurchasePrice,
     deletePurchasePrice,
   } = useData()
   const [kind, setKind] = useState<PartnerKind>('sales')
   const [query, setQuery] = useState('')
+  const [partnerSort, setPartnerSort] = useState<NameSort>('name')
+  const [itemSort, setItemSort] = useState<ItemSort>('name')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Supplier | null>(null)
   const [name, setName] = useState('')
   const [formError, setFormError] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<Supplier | null>(null)
   const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [priceModalOpen, setPriceModalOpen] = useState(false)
-  const [priceProductId, setPriceProductId] = useState('')
-  const [priceValue, setPriceValue] = useState('')
+  const [productQuery, setProductQuery] = useState('')
+  const [busyProductId, setBusyProductId] = useState<string | null>(null)
   const [priceError, setPriceError] = useState('')
-  const [editingPrice, setEditingPrice] = useState<PurchasePrice | null>(null)
-  const [editPrice, setEditPrice] = useState('')
   const [deletePriceTarget, setDeletePriceTarget] = useState<PurchasePrice | null>(null)
 
   const label = partnerLabel(kind)
@@ -42,12 +56,19 @@ export function Suppliers() {
     return data.suppliers
       .filter((s) => s.kind === kind)
       .filter((s) => !q || s.name.toLowerCase().includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  }, [data.suppliers, kind, query])
+      .sort((a, b) => {
+        if (partnerSort === 'created') {
+          const byDate = compareDateDesc(a.created_at, b.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.name, b.name)
+        }
+        return compareKo(a.name, b.name)
+      })
+  }, [data.suppliers, kind, partnerSort, query])
 
   useEffect(() => {
     setSelectedId(null)
-    setEditingPrice(null)
+    setProductQuery('')
+    setPriceError('')
   }, [kind])
 
   useEffect(() => {
@@ -71,8 +92,18 @@ export function Suppliers() {
         product: data.products.find((p) => p.id === sp.product_id),
       }))
       .filter((row) => row.product)
-      .sort((a, b) => (a.product?.name ?? '').localeCompare(b.product?.name ?? '', 'ko'))
-  }, [data.products, data.supply_prices, selected])
+      .sort((a, b) => {
+        if (itemSort === 'created') {
+          const byDate = compareDateDesc(a.product?.created_at, b.product?.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.product?.name ?? '', b.product?.name ?? '')
+        }
+        if (itemSort === 'price') {
+          const byPrice = compareNumberAsc(a.sp.supply_price, b.sp.supply_price)
+          return byPrice !== 0 ? byPrice : compareKo(a.product?.name ?? '', b.product?.name ?? '')
+        }
+        return compareKo(a.product?.name ?? '', b.product?.name ?? '')
+      })
+  }, [data.products, data.supply_prices, itemSort, selected])
 
   const purchaseRows = useMemo(() => {
     if (!selected || selected.kind !== 'purchase') return []
@@ -83,11 +114,54 @@ export function Suppliers() {
         product: data.products.find((p) => p.id === pp.product_id),
       }))
       .filter((row) => row.product)
-      .sort((a, b) => (a.product?.name ?? '').localeCompare(b.product?.name ?? '', 'ko'))
-  }, [data.products, data.purchase_prices, selected])
+      .sort((a, b) => {
+        if (itemSort === 'created') {
+          const byDate = compareDateDesc(a.product?.created_at, b.product?.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.product?.name ?? '', b.product?.name ?? '')
+        }
+        if (itemSort === 'price') {
+          const byPrice = compareNumberAsc(a.pp.purchase_price, b.pp.purchase_price)
+          return byPrice !== 0 ? byPrice : compareKo(a.product?.name ?? '', b.product?.name ?? '')
+        }
+        return compareKo(a.product?.name ?? '', b.product?.name ?? '')
+      })
+  }, [data.products, data.purchase_prices, itemSort, selected])
 
-  const linkedProductIds = new Set(purchaseRows.map((row) => row.pp.product_id))
-  const availableProducts = data.products.filter((p) => !linkedProductIds.has(p.id))
+  const availableProducts = useMemo(() => {
+    if (!selected || selected.kind !== 'purchase') return []
+    const linkedAnywhere = new Set(data.purchase_prices.map((pp) => pp.product_id))
+    const q = productQuery.trim().toLowerCase()
+    return data.products
+      .filter((p) => !linkedAnywhere.has(p.id))
+      .filter(
+        (p) =>
+          !q ||
+          p.name.toLowerCase().includes(q) ||
+          productOptionsQueryText(p.options).includes(q),
+      )
+      .sort((a, b) => {
+        if (itemSort === 'created') {
+          const byDate = compareDateDesc(a.created_at, b.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.name, b.name)
+        }
+        if (itemSort === 'price') {
+          const byCost = compareNumberAsc(a.cost, b.cost)
+          return byCost !== 0 ? byCost : compareKo(a.name, b.name)
+        }
+        return compareKo(a.name, b.name)
+      })
+  }, [data.products, data.purchase_prices, itemSort, productQuery, selected])
+
+  const addProductToVendor = async (productId: string) => {
+    if (!selected || selected.kind !== 'purchase' || busyProductId) return
+    const product = data.products.find((p) => p.id === productId)
+    if (!product) return
+    setBusyProductId(productId)
+    setPriceError('')
+    const result = await upsertPurchasePrice(selected.id, product.id, product.cost)
+    setBusyProductId(null)
+    if (!result.ok) setPriceError(result.error)
+  }
 
   const openCreate = () => {
     setEditing(null)
@@ -115,20 +189,6 @@ export function Suppliers() {
     setModalOpen(false)
   }
 
-  const handleSavePurchasePrice = async (e: FormEvent) => {
-    e.preventDefault()
-    if (!selected) return
-    const result = await upsertPurchasePrice(selected.id, priceProductId, Number(priceValue))
-    if (!result.ok) {
-      setPriceError(result.error)
-      return
-    }
-    setPriceModalOpen(false)
-    setPriceProductId('')
-    setPriceValue('')
-    setPriceError('')
-  }
-
   if (loading) {
     return (
       <div className="page">
@@ -150,7 +210,9 @@ export function Suppliers() {
       <div className="page__header">
         <div>
           <h1>업체 관리</h1>
-          <p className="page__desc">매출처와 매입처를 나눠 등록하고, 매입처에는 매입가를 입력합니다.</p>
+          <p className="page__desc">
+            매출처와 매입처를 나눠 등록합니다. 매입처는 상품을 누르면 상품 원가가 매입가로 연결됩니다.
+          </p>
         </div>
         <button type="button" className="btn btn--primary" onClick={openCreate}>
           {label} 등록
@@ -187,6 +249,7 @@ export function Suppliers() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        <SortSelect value={partnerSort} options={PARTNER_SORT_OPTIONS} onChange={setPartnerSort} />
       </div>
 
       {partners.length === 0 ? (
@@ -195,7 +258,7 @@ export function Suppliers() {
           description={
             kind === 'sales'
               ? '매출처를 등록하면 공급가를 연결할 수 있습니다.'
-              : '매입처를 등록한 뒤 상품별 매입가를 입력하세요.'
+              : '매입처를 등록한 뒤 상품을 눌러 연결하세요. 매입가는 상품 원가입니다.'
           }
           action={
             <button type="button" className="btn btn--primary" onClick={openCreate}>
@@ -227,11 +290,17 @@ export function Suppliers() {
                     className={`list-item ${selectedId === supplier.id ? 'list-item--active' : ''}`}
                     role="button"
                     tabIndex={0}
-                    onClick={() => setSelectedId(supplier.id)}
+                    onClick={() => {
+                      setSelectedId(supplier.id)
+                      setProductQuery('')
+                      setPriceError('')
+                    }}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault()
                         setSelectedId(supplier.id)
+                        setProductQuery('')
+                        setPriceError('')
                       }
                     }}
                   >
@@ -272,20 +341,8 @@ export function Suppliers() {
           <section className="panel">
             <div className="panel__header panel__header--row">
               <h2>{selected ? `${selected.name} 상품 목록` : `${label}별 상품`}</h2>
-              {kind === 'purchase' && selected ? (
-                <button
-                  type="button"
-                  className="btn btn--sm btn--primary"
-                  disabled={availableProducts.length === 0}
-                  onClick={() => {
-                    setPriceProductId(availableProducts[0]?.id ?? '')
-                    setPriceValue('')
-                    setPriceError('')
-                    setPriceModalOpen(true)
-                  }}
-                >
-                  매입가 등록
-                </button>
+              {selected && (kind === 'sales' ? salesRows.length > 0 : data.products.length > 0) ? (
+                <SortSelect value={itemSort} options={ITEM_SORT_OPTIONS} onChange={setItemSort} />
               ) : null}
             </div>
             {!selected ? (
@@ -320,122 +377,110 @@ export function Suppliers() {
                   }))}
                 />
               )
-            ) : purchaseRows.length === 0 ? (
+            ) : data.products.length === 0 ? (
               <EmptyState
-                title={`${selected.name}에 등록된 매입가가 없습니다`}
-                description="상품을 선택하고 매입가를 입력해 주세요."
+                title="연결할 상품이 없습니다"
+                description="상품 관리에서 상품을 등록하면 여기서 눌러 바로 연결할 수 있습니다."
                 action={
-                  availableProducts.length > 0 ? (
-                    <button
-                      type="button"
-                      className="btn btn--primary"
-                      onClick={() => {
-                        setPriceProductId(availableProducts[0]?.id ?? '')
-                        setPriceValue('')
-                        setPriceError('')
-                        setPriceModalOpen(true)
-                      }}
-                    >
-                      매입가 등록
-                    </button>
-                  ) : undefined
+                  <Link to="/products" className="btn btn--primary">
+                    상품 등록
+                  </Link>
                 }
               />
             ) : (
-              <div className="table-wrap">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>상품명</th>
-                      <th>매입가</th>
-                      <th>원가</th>
-                      <th>택배비</th>
-                      <th>옵션</th>
-                      <th>카톤</th>
-                      <th>파레트</th>
-                      <th>관리</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {purchaseRows.map(({ pp, product }) => (
-                      <tr key={pp.id}>
-                        <td>
-                          <strong>{product?.name}</strong>
-                        </td>
-                        <td className="price">
-                          {editingPrice?.id === pp.id ? (
-                            <input
-                              className="input input--inline"
-                              type="number"
-                              min="0"
-                              value={editPrice}
-                              onChange={(e) => setEditPrice(e.target.value)}
-                            />
-                          ) : (
-                            formatWon(pp.purchase_price)
-                          )}
-                        </td>
-                        <td>{formatWon(product?.cost ?? 0)}</td>
-                        <td>{formatWon(product?.shipping_fee ?? 0)}</td>
-                        <td className="cell-options">{formatProductOptions(product?.options)}</td>
-                        <td>{product?.carton_quantity.toLocaleString('ko-KR')}</td>
-                        <td>{product?.pallet_quantity.toLocaleString('ko-KR')}</td>
-                        <td>
-                          <div className="row-actions">
-                            {editingPrice?.id === pp.id ? (
-                              <>
-                                <button
-                                  type="button"
-                                  className="btn btn--sm btn--primary"
-                                  onClick={() => {
-                                    void (async () => {
-                                      const result = await updatePurchasePrice(pp.id, Number(editPrice))
-                                      if (!result.ok) {
-                                        setPriceError(result.error)
-                                        return
-                                      }
-                                      setEditingPrice(null)
-                                    })()
-                                  }}
-                                >
-                                  저장
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn btn--sm"
-                                  onClick={() => setEditingPrice(null)}
-                                >
-                                  취소
-                                </button>
-                              </>
-                            ) : (
-                              <>
-                                <button
-                                  type="button"
-                                  className="btn btn--sm"
-                                  onClick={() => {
-                                    setEditingPrice(pp)
-                                    setEditPrice(String(pp.purchase_price))
-                                  }}
-                                >
-                                  수정
-                                </button>
-                                <button
-                                  type="button"
-                                  className="btn btn--sm btn--danger-outline"
-                                  onClick={() => setDeletePriceTarget(pp)}
-                                >
-                                  삭제
-                                </button>
-                              </>
-                            )}
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <>
+                <p className="muted">
+                  상품을 누르면 원가가 매입가로 연결됩니다. 이미 다른 매입처에 붙은 상품은 목록에서 빠집니다.
+                </p>
+                {priceError ? <div className="toast toast--error">{priceError}</div> : null}
+                {availableProducts.length > 0 || productQuery ? (
+                  <>
+                    <div className="toolbar">
+                      <input
+                        className="input"
+                        placeholder="연결할 상품 검색"
+                        value={productQuery}
+                        onChange={(e) => setProductQuery(e.target.value)}
+                      />
+                    </div>
+                    {availableProducts.length === 0 ? (
+                      <p className="muted">검색된 미연결 상품이 없습니다.</p>
+                    ) : (
+                      <div className="select-list">
+                        {availableProducts.map((product) => (
+                          <button
+                            key={product.id}
+                            type="button"
+                            className="select-card"
+                            disabled={busyProductId === product.id}
+                            onClick={() => void addProductToVendor(product.id)}
+                          >
+                            <span className="select-card__check" aria-hidden="true" />
+                            <span className="select-card__body">
+                              <strong>{product.name}</strong>
+                              <span>
+                                원가 {formatWon(product.cost)} · 옵션{' '}
+                                {formatProductOptions(product.options)}
+                                {busyProductId === product.id ? ' · 연결 중…' : ''}
+                              </span>
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </>
+                ) : (
+                  <p className="hint">
+                    연결할 수 있는 상품이 없습니다. 다른 매입처에 이미 붙은 상품은 목록에 나오지 않으며,
+                    연결을 해제하면 다시 선택할 수 있습니다.
+                  </p>
+                )}
+
+                {purchaseRows.length === 0 ? (
+                  <p className="muted" style={{ marginTop: '0.9rem' }}>
+                    아직 연결된 상품이 없습니다. 위에서 상품을 눌러 주세요.
+                  </p>
+                ) : (
+                  <div className="table-wrap" style={{ marginTop: '0.9rem' }}>
+                    <table>
+                      <thead>
+                        <tr>
+                          <th>상품명</th>
+                          <th>매입가 (원가)</th>
+                          <th>택배비</th>
+                          <th>옵션</th>
+                          <th>카톤</th>
+                          <th>파레트</th>
+                          <th>관리</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {purchaseRows.map(({ pp, product }) => (
+                          <tr key={pp.id}>
+                            <td>
+                              <strong>{product?.name}</strong>
+                            </td>
+                            <td className="price">{formatWon(product?.cost ?? pp.purchase_price)}</td>
+                            <td>{formatWon(product?.shipping_fee ?? 0)}</td>
+                            <td className="cell-options">{formatProductOptions(product?.options)}</td>
+                            <td>{product?.carton_quantity.toLocaleString('ko-KR')}</td>
+                            <td>{product?.pallet_quantity.toLocaleString('ko-KR')}</td>
+                            <td>
+                              <button
+                                type="button"
+                                className="btn btn--sm btn--danger-outline"
+                                onClick={() => setDeletePriceTarget(pp)}
+                              >
+                                연결 해제
+                              </button>
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </>
             )}
           </section>
         </div>
@@ -465,46 +510,6 @@ export function Suppliers() {
         </form>
       </Modal>
 
-      <Modal open={priceModalOpen} title="매입가 등록" onClose={() => setPriceModalOpen(false)}>
-        <form className="form" onSubmit={(e) => void handleSavePurchasePrice(e)}>
-          <label className="field">
-            <span>상품</span>
-            <select
-              className="input"
-              value={priceProductId}
-              onChange={(e) => setPriceProductId(e.target.value)}
-            >
-              {availableProducts.map((product) => (
-                <option key={product.id} value={product.id}>
-                  {product.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>매입가 (원)</span>
-            <input
-              className="input"
-              type="number"
-              min="0"
-              value={priceValue}
-              onChange={(e) => setPriceValue(e.target.value)}
-              placeholder="예: 180"
-              autoFocus
-            />
-          </label>
-          {priceError ? <p className="form-error">{priceError}</p> : null}
-          <div className="modal__actions">
-            <button type="button" className="btn btn--ghost" onClick={() => setPriceModalOpen(false)}>
-              취소
-            </button>
-            <button type="submit" className="btn btn--primary" disabled={!priceProductId}>
-              저장
-            </button>
-          </div>
-        </form>
-      </Modal>
-
       <ConfirmDialog
         open={!!deleteTarget}
         title={`${label} 삭제`}
@@ -524,8 +529,8 @@ export function Suppliers() {
 
       <ConfirmDialog
         open={!!deletePriceTarget}
-        title="매입가 삭제"
-        message="이 매입처·상품 조합의 매입가를 삭제할까요?"
+        title="상품 연결 해제"
+        message="이 매입처에서 해당 상품 연결을 해제할까요?"
         onCancel={() => setDeletePriceTarget(null)}
         onConfirm={() => {
           if (deletePriceTarget) void deletePurchasePrice(deletePriceTarget.id)

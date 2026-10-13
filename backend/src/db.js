@@ -37,7 +37,7 @@ export async function ensureSchema() {
       purchase_price NUMERIC(12, 2) NOT NULL CHECK (purchase_price >= 0),
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
       updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE (supplier_id, product_id)
+      UNIQUE (product_id)
     )
   `)
   await query(`
@@ -45,6 +45,23 @@ export async function ensureSchema() {
   `)
   await query(`
     CREATE INDEX IF NOT EXISTS idx_purchase_prices_product ON purchase_prices(product_id)
+  `)
+  await query(`
+    DELETE FROM purchase_prices a
+    USING purchase_prices b
+    WHERE a.product_id = b.product_id
+      AND a.created_at > b.created_at
+  `)
+  await query(`
+    DELETE FROM purchase_prices a
+    USING purchase_prices b
+    WHERE a.product_id = b.product_id
+      AND a.id > b.id
+      AND a.created_at = b.created_at
+  `)
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS purchase_prices_product_id_key
+      ON purchase_prices (product_id)
   `)
   await query(`
     ALTER TABLE supply_prices

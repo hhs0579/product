@@ -5,9 +5,14 @@ import * as store from './store.js'
 
 const app = express()
 const PORT = Number(process.env.PORT || 4000)
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:5176'
 
 app.use(cors())
 app.use(express.json())
+
+app.get('/', (_req, res) => {
+  res.redirect(302, FRONTEND_URL)
+})
 
 app.get('/api/health', async (_req, res) => {
   try {
@@ -164,7 +169,8 @@ app.use((err, _req, res, _next) => {
 })
 
 app.listen(PORT, async () => {
-  console.log(`API listening on http://127.0.0.1:${PORT}`)
+  console.log(`화면: ${FRONTEND_URL}`)
+  console.log(`API:  http://127.0.0.1:${PORT}`)
   try {
     await ensureSchema()
     const result = await store.getAllData()

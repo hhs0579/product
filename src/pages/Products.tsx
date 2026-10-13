@@ -2,6 +2,7 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EmptyState } from '../components/EmptyState'
 import { Modal } from '../components/Modal'
+import { SortSelect } from '../components/SortSelect'
 import { useData } from '../context/DataContext'
 import {
   formatDate,
@@ -10,7 +11,16 @@ import {
   productOptionsQueryText,
   vendorNamesForProduct,
 } from '../lib/format'
+import { compareDateDesc, compareKo, compareNumberAsc } from '../lib/sort'
 import type { Product } from '../types'
+
+type ProductSort = 'name' | 'created' | 'cost'
+
+const PRODUCT_SORT_OPTIONS: { value: ProductSort; label: string }[] = [
+  { value: 'name', label: '상품명순' },
+  { value: 'created', label: '등록일순' },
+  { value: 'cost', label: '원가순' },
+]
 
 type OptionDraft = {
   id?: string
@@ -32,6 +42,7 @@ const emptyForm = {
 export function Products() {
   const { data, addProduct, updateProduct, deleteProduct } = useData()
   const [query, setQuery] = useState('')
+  const [sort, setSort] = useState<ProductSort>('name')
   const [modalOpen, setModalOpen] = useState(false)
   const [editing, setEditing] = useState<Product | null>(null)
   const [form, setForm] = useState(emptyForm)
@@ -50,8 +61,18 @@ export function Products() {
           vendors.includes(q)
         )
       })
-      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  }, [data.products, data.purchase_prices, data.suppliers, query])
+      .sort((a, b) => {
+        if (sort === 'created') {
+          const byDate = compareDateDesc(a.created_at, b.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.name, b.name)
+        }
+        if (sort === 'cost') {
+          const byCost = compareNumberAsc(a.cost, b.cost)
+          return byCost !== 0 ? byCost : compareKo(a.name, b.name)
+        }
+        return compareKo(a.name, b.name)
+      })
+  }, [data.products, data.purchase_prices, data.suppliers, query, sort])
 
   const openCreate = () => {
     setEditing(null)
@@ -193,6 +214,7 @@ export function Products() {
           value={query}
           onChange={(e) => setQuery(e.target.value)}
         />
+        <SortSelect value={sort} options={PRODUCT_SORT_OPTIONS} onChange={setSort} />
       </div>
 
       {products.length === 0 ? (

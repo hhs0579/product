@@ -1,9 +1,25 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { EmptyState } from '../components/EmptyState'
+import { SortSelect } from '../components/SortSelect'
 import { useData } from '../context/DataContext'
 import { formatProductOptions, formatWon, optionCost, partnerLabel, supplyOptionName } from '../lib/format'
+import { compareDateDesc, compareKo, compareNumberAsc } from '../lib/sort'
 import type { PartnerKind } from '../types'
+
+type PartnerSort = 'name' | 'created'
+type ProductSort = 'name' | 'created' | 'price'
+
+const PARTNER_SORT_OPTIONS: { value: PartnerSort; label: string }[] = [
+  { value: 'name', label: '업체명순' },
+  { value: 'created', label: '등록일순' },
+]
+
+const PRODUCT_SORT_OPTIONS: { value: ProductSort; label: string }[] = [
+  { value: 'name', label: '상품명순' },
+  { value: 'created', label: '등록일순' },
+  { value: 'price', label: '가격순' },
+]
 
 export function BySupplier() {
   const { data } = useData()
@@ -11,6 +27,8 @@ export function BySupplier() {
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [supplierQuery, setSupplierQuery] = useState('')
   const [productQuery, setProductQuery] = useState('')
+  const [partnerSort, setPartnerSort] = useState<PartnerSort>('name')
+  const [productSort, setProductSort] = useState<ProductSort>('name')
 
   const label = partnerLabel(kind)
 
@@ -19,8 +37,14 @@ export function BySupplier() {
     return data.suppliers
       .filter((s) => s.kind === kind)
       .filter((s) => !q || s.name.toLowerCase().includes(q))
-      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  }, [data.suppliers, kind, supplierQuery])
+      .sort((a, b) => {
+        if (partnerSort === 'created') {
+          const byDate = compareDateDesc(a.created_at, b.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.name, b.name)
+        }
+        return compareKo(a.name, b.name)
+      })
+  }, [data.suppliers, kind, partnerSort, supplierQuery])
 
   useEffect(() => {
     setSelectedId(null)
@@ -42,25 +66,39 @@ export function BySupplier() {
   const rows = useMemo(() => {
     if (!selected) return []
     const q = productQuery.trim().toLowerCase()
+    const matchName = (name: string) => !q || name.toLowerCase().includes(q)
+    const sortRows = <T extends { price: number; product?: { name: string; created_at: string } | null }>(
+      list: T[],
+    ) =>
+      list.sort((a, b) => {
+        if (productSort === 'created') {
+          const byDate = compareDateDesc(a.product?.created_at, b.product?.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.product?.name ?? '', b.product?.name ?? '')
+        }
+        if (productSort === 'price') {
+          const byPrice = compareNumberAsc(a.price, b.price)
+          return byPrice !== 0 ? byPrice : compareKo(a.product?.name ?? '', b.product?.name ?? '')
+        }
+        return compareKo(a.product?.name ?? '', b.product?.name ?? '')
+      })
+
     if (kind === 'sales') {
-      return data.supply_prices
-        .filter((sp) => sp.supplier_id === selected.id)
-        .map((sp) => ({
-          id: sp.id,
-          price: sp.supply_price,
-          shippingFee: sp.shipping_fee ?? 0,
-          optionId: sp.option_id,
-          product: data.products.find((p) => p.id === sp.product_id),
-        }))
-        .filter((row) => {
-          if (!row.product) return false
-          if (!q) return true
-          return row.product.name.toLowerCase().includes(q)
-        })
-        .sort((a, b) => (a.product?.name ?? '').localeCompare(b.product?.name ?? '', 'ko'))
+      return sortRows(
+        data.supply_prices
+          .filter((sp) => sp.supplier_id === selected.id)
+          .map((sp) => ({
+            id: sp.id,
+            price: sp.supply_price,
+            shippingFee: sp.shipping_fee ?? 0,
+            optionId: sp.option_id,
+            product: data.products.find((p) => p.id === sp.product_id),
+          }))
+          .filter((row) => row.product && matchName(row.product.name)),
+      )
     }
-    return data.purchase_prices
-      .filter((pp) => pp.supplier_id === selected.id)
+    return sortRows(
+      data.purchase_prices
+        .filter((pp) => pp.supplier_id === selected.id)
         .map((pp) => ({
           id: pp.id,
           price: pp.purchase_price,
@@ -68,13 +106,9 @@ export function BySupplier() {
           optionId: null as string | null,
           product: data.products.find((p) => p.id === pp.product_id),
         }))
-      .filter((row) => {
-        if (!row.product) return false
-        if (!q) return true
-        return row.product.name.toLowerCase().includes(q)
-      })
-      .sort((a, b) => (a.product?.name ?? '').localeCompare(b.product?.name ?? '', 'ko'))
-  }, [data.products, data.purchase_prices, data.supply_prices, kind, productQuery, selected])
+        .filter((row) => row.product && matchName(row.product.name)),
+    )
+  }, [data.products, data.purchase_prices, data.supply_prices, kind, productQuery, productSort, selected])
 
   if (partners.length === 0 && !supplierQuery) {
     return (
@@ -154,6 +188,7 @@ export function BySupplier() {
               value={supplierQuery}
               onChange={(e) => setSupplierQuery(e.target.value)}
             />
+            <SortSelect value={partnerSort} options={PARTNER_SORT_OPTIONS} onChange={setPartnerSort} />
           </div>
           <div className="list">
             {partners.map((supplier) => {
@@ -207,6 +242,7 @@ export function BySupplier() {
                   value={productQuery}
                   onChange={(e) => setProductQuery(e.target.value)}
                 />
+                <SortSelect value={productSort} options={PRODUCT_SORT_OPTIONS} onChange={setProductSort} />
               </div>
               {rows.length === 0 ? (
                 <EmptyState

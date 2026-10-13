@@ -2,9 +2,26 @@ import { useMemo, useState, type FormEvent } from 'react'
 import { Link } from 'react-router-dom'
 import { ConfirmDialog } from '../components/ConfirmDialog'
 import { EmptyState } from '../components/EmptyState'
+import { SortSelect } from '../components/SortSelect'
 import { useData } from '../context/DataContext'
 import { formatWon, formatProductOptions, optionCost, productOptionsQueryText, supplyOptionName, vendorNamesForProduct } from '../lib/format'
+import { compareDateDesc, compareKo, compareNumberAsc } from '../lib/sort'
 import type { Product, SupplyPrice } from '../types'
+
+type ProductSort = 'name' | 'created'
+type SupplySort = 'supplier' | 'product' | 'created' | 'price'
+
+const PRODUCT_SORT_OPTIONS: { value: ProductSort; label: string }[] = [
+  { value: 'name', label: '상품명순' },
+  { value: 'created', label: '등록일순' },
+]
+
+const SUPPLY_SORT_OPTIONS: { value: SupplySort; label: string }[] = [
+  { value: 'supplier', label: '매출처순' },
+  { value: 'product', label: '상품명순' },
+  { value: 'created', label: '등록일순' },
+  { value: 'price', label: '공급가순' },
+]
 
 type PriceDraft = {
   productId: string
@@ -28,6 +45,8 @@ export function SupplyPrices() {
   const [supplierId, setSupplierId] = useState('')
   const [productIds, setProductIds] = useState<string[]>([])
   const [productQuery, setProductQuery] = useState('')
+  const [productSort, setProductSort] = useState<ProductSort>('name')
+  const [listSort, setListSort] = useState<SupplySort>('supplier')
   const [drafts, setDrafts] = useState<PriceDraft[]>([])
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
@@ -58,15 +77,27 @@ export function SupplyPrices() {
           vendors.includes(q)
         )
       })
-      .sort((a, b) => a.name.localeCompare(b.name, 'ko'))
-  }, [data.products, data.purchase_prices, data.suppliers, productQuery])
+      .sort((a, b) => {
+        if (productSort === 'created') {
+          const byDate = compareDateDesc(a.created_at, b.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.name, b.name)
+        }
+        return compareKo(a.name, b.name)
+      })
+  }, [data.products, data.purchase_prices, data.suppliers, productQuery, productSort])
 
   const selectedProducts = useMemo(
     () =>
       data.products
         .filter((p) => productIds.includes(p.id))
-        .sort((a, b) => a.name.localeCompare(b.name, 'ko')),
-    [data.products, productIds],
+        .sort((a, b) => {
+          if (productSort === 'created') {
+            const byDate = compareDateDesc(a.created_at, b.created_at)
+            return byDate !== 0 ? byDate : compareKo(a.name, b.name)
+          }
+          return compareKo(a.name, b.name)
+        }),
+    [data.products, productIds, productSort],
   )
 
   const existingCount = useMemo(
@@ -104,16 +135,33 @@ export function SupplyPrices() {
       }))
       .filter((row) => row.supplier && row.product)
       .sort((a, b) => {
-        const bySupplier = (a.supplier?.name ?? '').localeCompare(b.supplier?.name ?? '', 'ko')
+        if (listSort === 'created') {
+          const byDate = compareDateDesc(a.sp.created_at, b.sp.created_at)
+          return byDate !== 0 ? byDate : compareKo(a.product?.name ?? '', b.product?.name ?? '')
+        }
+        if (listSort === 'price') {
+          const byPrice = compareNumberAsc(a.sp.supply_price, b.sp.supply_price)
+          if (byPrice !== 0) return byPrice
+          return compareKo(a.product?.name ?? '', b.product?.name ?? '')
+        }
+        if (listSort === 'product') {
+          const byProduct = compareKo(a.product?.name ?? '', b.product?.name ?? '')
+          if (byProduct !== 0) return byProduct
+          return supplyOptionName(a.product, a.sp.option_id).localeCompare(
+            supplyOptionName(b.product, b.sp.option_id),
+            'ko',
+          )
+        }
+        const bySupplier = compareKo(a.supplier?.name ?? '', b.supplier?.name ?? '')
         if (bySupplier !== 0) return bySupplier
-        const byProduct = (a.product?.name ?? '').localeCompare(b.product?.name ?? '', 'ko')
+        const byProduct = compareKo(a.product?.name ?? '', b.product?.name ?? '')
         if (byProduct !== 0) return byProduct
         return supplyOptionName(a.product, a.sp.option_id).localeCompare(
           supplyOptionName(b.product, b.sp.option_id),
           'ko',
         )
       })
-  }, [data.products, data.suppliers, data.supply_prices])
+  }, [data.products, data.suppliers, data.supply_prices, listSort])
 
   const resetWizard = () => {
     setStep(1)
@@ -334,15 +382,15 @@ export function SupplyPrices() {
         {step === 2 ? (
           <div className="wizard-body">
             <p className="muted">선택 매출처: <strong>{selectedSupplier?.name}</strong></p>
-            <label className="field">
-              <span>상품 검색</span>
+            <div className="toolbar">
               <input
                 className="input"
                 value={productQuery}
                 onChange={(e) => setProductQuery(e.target.value)}
                 placeholder="상품명으로 검색"
               />
-            </label>
+              <SortSelect value={productSort} options={PRODUCT_SORT_OPTIONS} onChange={setProductSort} />
+            </div>
             <div className="select-toolbar">
               <p className="muted">{productIds.length}개 선택됨</p>
               <button
@@ -498,8 +546,11 @@ export function SupplyPrices() {
       </section>
 
       <section className="panel">
-        <div className="panel__header">
+        <div className="panel__header panel__header--row">
           <h2>등록된 공급가 ({rows.length})</h2>
+          {rows.length > 0 ? (
+            <SortSelect value={listSort} options={SUPPLY_SORT_OPTIONS} onChange={setListSort} />
+          ) : null}
         </div>
         {rows.length === 0 ? (
           <EmptyState

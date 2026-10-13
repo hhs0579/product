@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS purchase_prices (
   purchase_price NUMERIC(12, 2) NOT NULL CHECK (purchase_price >= 0),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  UNIQUE (supplier_id, product_id)
+  UNIQUE (product_id)
 );
 
 CREATE INDEX IF NOT EXISTS idx_supply_prices_supplier ON supply_prices(supplier_id);
